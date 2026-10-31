@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 /* ── provided ───────────────────────────────────────────────────────────
    sha1_hex(data, len, out): SHA-1 of `len` bytes as 40 lowercase hex chars
@@ -52,12 +53,32 @@ static void sha1_hex(const unsigned char* data, size_t len, char out[41]) {
 /* Each input line is one file's content. The "\n" that ends the line is NOT part of it. */
 
 static void hash_blob(const unsigned char *content, size_t n, char out[41]) {
-    /* TODO: build "blob <byte length>" followed by ONE zero byte, then the content, in a buffer,
-             and call sha1_hex(buffer, total_length, out). Never use strlen on the buffer: it
-             contains a zero byte on purpose. */
-    (void)content;
-    (void)n;
-    out[0] = 0;
+    unsigned char* buf;
+    size_t bufLen;
+    int headerLen;
+
+    headerLen = snprintf(NULL, 0, "blob %zu", n);
+    //
+    // Check for formatting errors
+    //
+    if (headerLen < 0) {
+        return;
+    }
+    //
+    // Check for integer overflow
+    //
+    if (n > SIZE_MAX - (size_t)headerLen - 1) {
+        return;
+    }
+    bufLen = headerLen + 1 + n;
+    buf = malloc(bufLen);
+    if (buf == NULL) {
+        return;
+    }
+    snprintf(buf, headerLen + 1, "blob %zu", n);  // Write at most headerLen + 1 bytes include the \0-byte
+    memcpy(buf + headerLen + 1, content, n);
+    sha1_hex(buf, bufLen, out);
+    free(buf);
 }
 
 int main(void) {
