@@ -1,0 +1,3 @@
+DELETE a.txt
+CREATE b.txt
+CREATE dir/c.txt

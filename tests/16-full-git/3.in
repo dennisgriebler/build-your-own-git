@@ -1,0 +1,14 @@
+ADD missing.txt
+COMMIT nothing yet
+LOG
+BRANCH topic
+STATUS
+RM ghost
+WRITE a.txt x
+ADD a.txt
+COMMIT one
+COMMIT again
+CHECKOUT nowhere
+BRANCH main
+CAT nothing.txt
+LS

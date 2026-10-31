@@ -1,0 +1,12 @@
+Changes to be committed:
+	modified:   a.txt
+	deleted:    b.txt
+	new file:   new.txt
+Changes not staged for commit:
+	modified:   a.txt
+	modified:   c.txt
+	deleted:    d.txt
+Untracked files:
+	b.txt
+	untracked/f.txt
+	zz.log

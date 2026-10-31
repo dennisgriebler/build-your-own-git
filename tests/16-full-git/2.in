@@ -1,0 +1,17 @@
+WRITE src/main.c int main(void) { return 0; }
+WRITE src/util/str.c // string helpers
+WRITE README.md # demo
+WRITE foo.txt a file
+WRITE foo/x.txt a nested file
+WRITE foo-bar a hyphen file
+WRITE foo0 a zero file
+ADD src/main.c
+ADD src/util/str.c
+ADD README.md
+ADD foo.txt
+ADD foo/x.txt
+ADD foo-bar
+ADD foo0
+COMMIT first layout
+LOG
+STATUS

@@ -1,0 +1,82 @@
+{
+  "course": "build-git",
+  "language": "c",
+  "language_id": 1050,
+  "entrypoint": "main.c",
+  "version": 1,
+  "content_hash": "5152d40b9d17ecb1",
+  "lessons": [
+    {
+      "slug": "hash-object",
+      "tests_hash": "be1aeb1bda18"
+    },
+    {
+      "slug": "object-format",
+      "tests_hash": "409a79af8daa"
+    },
+    {
+      "slug": "zlib-storage",
+      "tests_hash": "90504fdb767d"
+    },
+    {
+      "slug": "pack-files",
+      "tests_hash": ""
+    },
+    {
+      "slug": "cat-file-cli",
+      "tests_hash": "91a2fa19207b"
+    },
+    {
+      "slug": "pack-header",
+      "tests_hash": "9a0bd0eb0cdb"
+    },
+    {
+      "slug": "tree-object",
+      "tests_hash": "b7617a99def1"
+    },
+    {
+      "slug": "commit-object",
+      "tests_hash": "4e500e3dfe16"
+    },
+    {
+      "slug": "log-walk",
+      "tests_hash": "8f3d3fde752c"
+    },
+    {
+      "slug": "read-tree",
+      "tests_hash": "c534cf9845d0"
+    },
+    {
+      "slug": "refs-head",
+      "tests_hash": "fb8c6bbe9bd5"
+    },
+    {
+      "slug": "index",
+      "tests_hash": "573570a27915"
+    },
+    {
+      "slug": "checkout",
+      "tests_hash": "d3a11a0732cf"
+    },
+    {
+      "slug": "diff",
+      "tests_hash": "451ee347e9ed"
+    },
+    {
+      "slug": "merge",
+      "tests_hash": "27ff87f0ed26"
+    },
+    {
+      "slug": "full-git",
+      "tests_hash": "5fdb26a1f954"
+    },
+    {
+      "slug": "remote-protocol",
+      "tests_hash": ""
+    },
+    {
+      "slug": "merge-base",
+      "tests_hash": "16d86cde8636"
+    }
+  ]
+}

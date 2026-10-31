@@ -1,0 +1,8 @@
+a
+<<<<<<< ours
+X
+=======
+Y
+>>>>>>> theirs
+c
+CONFLICTS 1

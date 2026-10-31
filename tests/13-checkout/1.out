@@ -1,0 +1,3 @@
+DELETE src/old.c
+CREATE docs/new.md
+UPDATE edit.txt

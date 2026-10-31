@@ -1,0 +1,12 @@
+ERR pathspec 'missing.txt' did not match any files
+ERR nothing to commit
+ERR no commits yet
+ERR not a valid object name: 'main'
+clean
+ERR no such file ghost
+5045870a46e5f03021d8f0a4b5ca6f1dad8f6b96
+ERR nothing to commit
+ERR unknown branch nowhere
+ERR a branch named main already exists
+ERR no such file nothing.txt
+a.txt

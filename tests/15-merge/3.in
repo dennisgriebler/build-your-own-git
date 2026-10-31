@@ -1,0 +1,12 @@
+=== BASE
+a
+b
+c
+=== OURS
+a
+same
+c
+=== THEIRS
+a
+same
+c

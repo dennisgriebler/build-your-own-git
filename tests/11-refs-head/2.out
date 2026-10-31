@@ -1,0 +1,7 @@
+On branch main
+On branch dev
+ERR dangling ref refs/heads/dev
+94c911791d96f39fb87d078f51642bfef4d09fee refs/heads/dev
+d9d497196504ad708ba6f770ffcbc7c0c2269197 refs/heads/main
+94c911791d96f39fb87d078f51642bfef4d09fee
+d9d497196504ad708ba6f770ffcbc7c0c2269197

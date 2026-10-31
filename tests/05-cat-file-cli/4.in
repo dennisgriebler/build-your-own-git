@@ -1,0 +1,4 @@
+QUERY -t deadbeef
+QUERY -e deadbeef
+QUERY -s deadbeef
+QUERY -p deadbeef
