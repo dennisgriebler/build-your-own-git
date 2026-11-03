@@ -1,84 +1,117 @@
-#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <stdint.h>
+#include <stdbool.h>
 
-/* ── provided ───────────────────────────────────────────────────────────
-   sha1_hex(data, len, out): SHA-1 of `len` bytes as 40 lowercase hex chars
-   (`out` must hold 41). The grader (and the local runner) compile this one
-   file with no external libraries — there is no OpenSSL — so SHA-1
-   (RFC 3174) lives here. You never need to change it.
-   ─────────────────────────────────────────────────────────────────────── */
-static uint32_t sha1_rol(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
-static void sha1_digest(const unsigned char* data, size_t len, unsigned char out[20]) {
-    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
-    size_t total = ((len + 8) / 64 + 1) * 64;
-    unsigned char* msg = (unsigned char*)calloc(total, 1);
-    memcpy(msg, data, len);
-    msg[len] = 0x80;
-    uint64_t bits = (uint64_t)len * 8;
-    for (int i = 0; i < 8; i++) msg[total - 1 - i] = (unsigned char)(bits >> (8 * i));
-    for (size_t off = 0; off < total; off += 64) {
-        uint32_t w[80];
-        for (int i = 0; i < 16; i++)
-            w[i] = ((uint32_t)msg[off + 4 * i] << 24) | ((uint32_t)msg[off + 4 * i + 1] << 16) |
-                   ((uint32_t)msg[off + 4 * i + 2] << 8) | (uint32_t)msg[off + 4 * i + 3];
-        for (int i = 16; i < 80; i++) w[i] = sha1_rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
-        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
-        for (int i = 0; i < 80; i++) {
-            uint32_t f, k;
-            if (i < 20)      { f = (b & c) | (~b & d);           k = 0x5A827999u; }
-            else if (i < 40) { f = b ^ c ^ d;                    k = 0x6ED9EBA1u; }
-            else if (i < 60) { f = (b & c) | (b & d) | (c & d);  k = 0x8F1BBCDCu; }
-            else             { f = b ^ c ^ d;                    k = 0xCA62C1D6u; }
-            uint32_t t = sha1_rol(a, 5) + f + e + k + w[i];
-            e = d; d = c; c = sha1_rol(b, 30); b = a; a = t;
+/* Writes the one output line for the object `raw` (n bytes) into `out`. Bytes are not text:
+   the object may hold zero bytes, so never use strlen on it. `out` has room for n + 64 chars. */
+static void check(const unsigned char *raw, size_t n, char *out) {
+    size_t numSP;
+    size_t posSP;
+    const unsigned char* pNUL;
+    size_t headerLen;
+    size_t typeLen;
+    size_t sizeStart;
+    size_t sizeLen;
+    size_t sizeDeclared;
+    size_t sizeActual;
+
+    numSP = 0;
+    posSP = 0;
+    //
+    // check for first NUL byte
+    //
+    pNUL = memchr(raw, '\0', n);
+    if (pNUL == NULL) {
+        sprintf(out, "ERR missing NUL");
+        return;
+    }
+    //
+    // Does raw contain exactly one space before the NULL char?
+    //
+    headerLen = (size_t)(pNUL - raw);
+    for (size_t i = 0; i < headerLen; ++i) {
+        if (raw[i] == ' ') {
+            ++numSP;
+            posSP = i;
         }
-        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
     }
-    free(msg);
-    for (int i = 0; i < 5; i++) {
-        out[4 * i] = (unsigned char)(h[i] >> 24); out[4 * i + 1] = (unsigned char)(h[i] >> 16);
-        out[4 * i + 2] = (unsigned char)(h[i] >> 8); out[4 * i + 3] = (unsigned char)h[i];
+    if (numSP != 1) {
+        sprintf(out, "ERR bad header");
+        return;
     }
+    typeLen = posSP;
+    //
+    // check type
+    //
+    if (!(((typeLen == 4) && (memcmp(raw, "tree", 4)   == 0))
+       || ((typeLen == 4) && (memcmp(raw, "blob", 4)   == 0))
+       || ((typeLen == 6) && (memcmp(raw, "commit", 6) == 0))
+       || ((typeLen == 3) && (memcmp(raw, "tag", 3)    == 0)))) {    
+        memcpy(out, "ERR unknown type ", 17);
+        memcpy(out + 17, raw, typeLen);
+        out[typeLen + 17] = '\0';
+        return;    
+    }
+    //
+    // check size
+    //
+    sizeStart = posSP + 1;
+    sizeLen   = headerLen - sizeStart;
+    //
+    // if sizeLen >= 2, only char 1-0 are valid as start
+    // 
+    if (sizeLen >= 2) {
+        if ((raw[sizeStart] - '0' < 1) || (raw[sizeStart] - '0' > 9)) {
+            sprintf(out, "ERR bad size");
+            return;      
+        }
+    }
+    sizeDeclared = 0;
+    for (size_t i = 0; i < sizeLen; ++i) {
+        if ((raw[sizeStart + i] - '0' < 0) || (raw[sizeStart + i] - '0' > 9)) {
+            sprintf(out, "ERR bad size");
+            return;      
+        }
+        sizeDeclared *= 10;
+        sizeDeclared += raw[sizeStart + i] - '0';
+    }
+    //
+    // check declared vs actual
+    //
+    sizeActual = n - headerLen -1;
+    if (sizeDeclared != sizeActual) {
+        sprintf(out, "ERR size mismatch %zu != %zu", sizeDeclared, sizeActual);
+        return;
+    }
+    memcpy(out, raw, headerLen);
+    out[headerLen] = '\0';
 }
-static void sha1_hex(const unsigned char* data, size_t len, char out[41]) {
-    unsigned char d[20];
-    sha1_digest(data, len, d);
-    for (int i = 0; i < 20; i++) sprintf(out + 2 * i, "%02x", d[i]);
-    out[40] = 0;
+
+static int hexval(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
-/* Each input line is one file's content. The "\n" that ends the line is NOT part of it. */
-
-static void hash_blob(const unsigned char *content, size_t n, char out[41]) {
-    unsigned char* buf;
-    size_t bufLen;
-    int headerLen;
-
-    headerLen = snprintf(NULL, 0, "blob %zu", n);
-    //
-    // Check for formatting errors
-    //
-    if (headerLen < 0) {
+static void handle_line(const unsigned char *line, size_t len) {
+    size_t i;
+    int ok = (len % 2 == 0);
+    for (i = 0; ok && i < len; i++) {
+        if (hexval(line[i]) < 0) ok = 0;
+    }
+    if (!ok) {
+        printf("ERR bad hex\n");
         return;
     }
-    //
-    // Check for integer overflow
-    //
-    if (n > SIZE_MAX - (size_t)headerLen - 1) {
-        return;
-    }
-    bufLen = headerLen + 1 + n;
-    buf = malloc(bufLen);
-    if (buf == NULL) {
-        return;
-    }
-    snprintf(buf, headerLen + 1, "blob %zu", n);  // Write at most headerLen + 1 bytes include the \0-byte
-    memcpy(buf + headerLen + 1, content, n);
-    sha1_hex(buf, bufLen, out);
-    free(buf);
+    unsigned char *raw = (unsigned char *)malloc(len / 2 + 1);
+    char *out = (char *)malloc(len / 2 + 64);
+    for (i = 0; i < len / 2; i++) raw[i] = (unsigned char)(hexval(line[2 * i]) * 16 + hexval(line[2 * i + 1]));
+    check(raw, len / 2, out);
+    printf("%s\n", out);
+    free(raw);
+    free(out);
 }
 
 int main(void) {
@@ -93,19 +126,14 @@ int main(void) {
             if (!data) return 1;
         }
     }
-    size_t start = 0;
-    char hex[41];
-    for (size_t i = 0; i < len; i++) {
+    size_t start = 0, i;
+    for (i = 0; i < len; i++) {
         if (data[i] == '\n') {
-            hash_blob(data + start, i - start, hex);
-            printf("%s\n", hex);
+            handle_line(data + start, i - start);
             start = i + 1;
         }
     }
-    if (start < len) {
-        hash_blob(data + start, len - start, hex);
-        printf("%s\n", hex);
-    }
+    if (start < len) handle_line(data + start, len - start);
     free(data);
     return 0;
 }
