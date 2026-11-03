@@ -60,7 +60,11 @@ static void check(const unsigned char *raw, size_t n, char *out) {
     sizeLen   = headerLen - sizeStart;
     //
     // if sizeLen >= 2, only char 1-0 are valid as start
-    // 
+    //
+    if (sizeLen == 0 || sizeLen > 9) {
+        sprintf(out, "ERR bad size");
+        return;   
+    }
     if (sizeLen >= 2) {
         if ((raw[sizeStart] - '0' < 1) || (raw[sizeStart] - '0' > 9)) {
             sprintf(out, "ERR bad size");
