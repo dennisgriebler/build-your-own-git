@@ -1,95 +1,219 @@
-#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
+#include <stdio.h>
 
-/* Writes the one output line for the object `raw` (n bytes) into `out`. Bytes are not text:
-   the object may hold zero bytes, so never use strlen on it. `out` has room for n + 64 chars. */
-static void check(const unsigned char *raw, size_t n, char *out) {
-    size_t numSP;
-    size_t posSP;
-    const unsigned char* pNUL;
-    size_t headerLen;
-    size_t typeLen;
-    size_t sizeStart;
-    size_t sizeLen;
-    size_t sizeDeclared;
-    size_t sizeActual;
+/* ── provided ───────────────────────────────────────────────────────────
+   sha1_hex(data, len, out): SHA-1 of `len` bytes as 40 lowercase hex chars
+   (`out` must hold 41). The grader (and the local runner) compile this one
+   file with no external libraries — there is no OpenSSL — so SHA-1
+   (RFC 3174) lives here. You never need to change it.
+   ─────────────────────────────────────────────────────────────────────── */
+static uint32_t sha1_rol(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+static void sha1_digest(const unsigned char* data, size_t len, unsigned char out[20]) {
+    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+    size_t total = ((len + 8) / 64 + 1) * 64;
+    unsigned char* msg = (unsigned char*)calloc(total, 1);
+    memcpy(msg, data, len);
+    msg[len] = 0x80;
+    uint64_t bits = (uint64_t)len * 8;
+    for (int i = 0; i < 8; i++) msg[total - 1 - i] = (unsigned char)(bits >> (8 * i));
+    for (size_t off = 0; off < total; off += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; i++)
+            w[i] = ((uint32_t)msg[off + 4 * i] << 24) | ((uint32_t)msg[off + 4 * i + 1] << 16) |
+                   ((uint32_t)msg[off + 4 * i + 2] << 8) | (uint32_t)msg[off + 4 * i + 3];
+        for (int i = 16; i < 80; i++) w[i] = sha1_rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; i++) {
+            uint32_t f, k;
+            if (i < 20)      { f = (b & c) | (~b & d);           k = 0x5A827999u; }
+            else if (i < 40) { f = b ^ c ^ d;                    k = 0x6ED9EBA1u; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d);  k = 0x8F1BBCDCu; }
+            else             { f = b ^ c ^ d;                    k = 0xCA62C1D6u; }
+            uint32_t t = sha1_rol(a, 5) + f + e + k + w[i];
+            e = d; d = c; c = sha1_rol(b, 30); b = a; a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    }
+    free(msg);
+    for (int i = 0; i < 5; i++) {
+        out[4 * i] = (unsigned char)(h[i] >> 24); out[4 * i + 1] = (unsigned char)(h[i] >> 16);
+        out[4 * i + 2] = (unsigned char)(h[i] >> 8); out[4 * i + 3] = (unsigned char)h[i];
+    }
+}
+static void sha1_hex(const unsigned char* data, size_t len, char out[41]) {
+    unsigned char d[20];
+    sha1_digest(data, len, d);
+    for (int i = 0; i < 20; i++) sprintf(out + 2 * i, "%02x", d[i]);
+    out[40] = 0;
+}
 
-    numSP = 0;
-    posSP = 0;
-    //
-    // check for first NUL byte
-    //
-    pNUL = memchr(raw, '\0', n);
-    if (pNUL == NULL) {
-        sprintf(out, "ERR missing NUL");
-        return;
+/* Adler-32 of p[0..n): (b << 16) | a, both sums modulo 65521. */
+static uint32_t adler32(const unsigned char *p, size_t n) {
+    /* TODO: a starts at 1 and b at 0; for every byte: a += byte, then b += a, both modulo 65521. */
+    size_t a;
+    size_t b;
+    uint32_t sum;
+
+    a = 1;
+    b = 0;
+    for (size_t i = 0; i < n; ++i) {
+        a = (a + p[i]) % 65521;
+        b = (b + a) % 65521;
     }
+    sum  = (a & 0xFFFF);
+    sum |= (b & 0xFFFF) << 16;
+    return sum;
+}
+
+/* Writes `data` (n bytes) as a zlib stream of stored deflate blocks into out and returns its
+   length. out has room for n + 5 * (n / 65535 + 1) + 6 bytes. */
+static size_t wrap_stored(const unsigned char *data, size_t n, unsigned char *out) {
     //
-    // Does raw contain exactly one space before the NULL char?
+    // zlib stream format:
+    // 2 bytes   header:   CMF FLG          (usually 78 01, 78 9c or 78 da)
+    // n bytes   deflate:  one or more blocks (RFC 1951)
+    // 4 bytes   trailer:  Adler-32 of the uncompressed bytes, big-endian
     //
-    headerLen = (size_t)(pNUL - raw);
-    for (size_t i = 0; i < headerLen; ++i) {
-        if (raw[i] == ' ') {
-            ++numSP;
-            posSP = i;
+    size_t a;
+    size_t b;
+    size_t numBlocks;
+    size_t outPos;
+    size_t numPayload;
+    size_t toWrite;
+    uint32_t adlerSum32;
+    //
+    // append the header
+    //
+    outPos = 0;
+    toWrite = n;
+    numPayload = n;
+    adlerSum32 = adler32(data, n);
+    out[0] = 0x78;
+    out[1] = 0x01;
+    outPos = 2;
+    //
+    // built the deflate block
+    //
+    numBlocks = 1;
+    if (n > 65535) {
+        numBlocks += (n /65535);
+    }
+    do {
+        //
+        // Block format:
+        // 1 byte    bit 0 = "this is the last block", bits 1-2 = 00 for stored
+        // 2 bytes   LEN,  little-endian, number of data bytes (at most 65535)
+        // 2 bytes   NLEN, little-endian, the bitwise complement of LEN
+        // LEN bytes the data
+        //
+        out[outPos++] = (numBlocks > 1) ? 0x00 : 0x01;
+        numPayload = (toWrite > 65535) ? 65535 : toWrite;
+        out[outPos++] = (char)(numPayload & 0x00FF);
+        out[outPos++] = (char)((numPayload & 0xFF00) >> 8);
+        out[outPos++] = (char)~(numPayload & 0x00FF);
+        out[outPos++] = (char)~((numPayload & 0xFF00) >> 8);
+        for (size_t i = 0; i < numPayload; ++i) {
+            out[outPos++] = *data++;
         }
+        toWrite -= numPayload;
+        --numBlocks;
+    } while (numBlocks > 0);
+    //
+    // compute and append adler checksum
+    //
+    out[outPos++] = (uint8_t)((adlerSum32 >> 24) & 0x000000FF);
+    out[outPos++] = (uint8_t)((adlerSum32 >> 16) & 0x000000FF);
+    out[outPos++] = (uint8_t)((adlerSum32 >>  8) & 0x000000FF);
+    out[outPos++] = (uint8_t)((adlerSum32 >>  0) & 0x000000FF);
+    return outPos;
+}
+
+/* Copies the inflated bytes into out (room for n bytes) and sets *outlen. Returns NULL on success,
+   otherwise the error text that follows "ERR ". */
+static const char *unwrap_stored(const unsigned char *f, size_t n, unsigned char *out, size_t *outlen) {
+    uint8_t  vCMF;
+    uint8_t  vFLG;
+    uint16_t zLibHeader;
+    uint8_t  blockHeader;
+    uint8_t  vBlockType;
+    uint16_t vBlockLen;
+    uint16_t vBlockNLen;
+    uint8_t  lastBlock;
+    uint32_t vAdlerSumShould;
+    uint32_t vAdlerSumIs;
+    size_t   rPos;
+
+    rPos = 0;
+    //
+    // check header
+    //
+    if (n < 2) {   // Does stream end before 2-byte header?
+        return "truncated";
     }
-    if (numSP != 1) {
-        sprintf(out, "ERR bad header");
-        return;
-    }
-    typeLen = posSP;
-    //
-    // check type
-    //
-    if (!(((typeLen == 4) && (memcmp(raw, "tree", 4)   == 0))
-       || ((typeLen == 4) && (memcmp(raw, "blob", 4)   == 0))
-       || ((typeLen == 6) && (memcmp(raw, "commit", 6) == 0))
-       || ((typeLen == 3) && (memcmp(raw, "tag", 3)    == 0)))) {    
-        memcpy(out, "ERR unknown type ", 17);
-        memcpy(out + 17, raw, typeLen);
-        out[typeLen + 17] = '\0';
-        return;    
+    vCMF       = f[rPos++];
+    vFLG       = f[rPos++];
+    zLibHeader = ((uint16_t)vCMF << 8) | vFLG;
+    if ((((vCMF & 0xF0) >> 4) > 0x07) 
+      || ((vCMF & 0x0F) != 0x08)
+      || ((vFLG & 0x20) != 0x00)
+      || ((zLibHeader % 31) != 0x0 )) {
+        return "bad zlib header";
     }
     //
-    // check size
+    // parse blocks
     //
-    sizeStart = posSP + 1;
-    sizeLen   = headerLen - sizeStart;
-    //
-    // if sizeLen >= 2, only char 1-0 are valid as start
-    //
-    if (sizeLen == 0 || sizeLen > 9) {
-        sprintf(out, "ERR bad size");
-        return;   
-    }
-    if (sizeLen >= 2) {
-        if ((raw[sizeStart] - '0' < 1) || (raw[sizeStart] - '0' > 9)) {
-            sprintf(out, "ERR bad size");
-            return;      
+    *outlen = 0;
+    do {
+        if ((n - rPos) < 1) {  // does stream end before block?
+            return "truncated";
         }
-    }
-    sizeDeclared = 0;
-    for (size_t i = 0; i < sizeLen; ++i) {
-        if ((raw[sizeStart + i] - '0' < 0) || (raw[sizeStart + i] - '0' > 9)) {
-            sprintf(out, "ERR bad size");
-            return;      
+        blockHeader = f[rPos++];
+        vBlockType = (blockHeader >> 1) & 0x3;
+        lastBlock  =  blockHeader & 0x1;
+        if (vBlockType == 1 || vBlockType == 2) {
+            return "compressed block unsupported";
+        } 
+        if (vBlockType == 3) {
+            return "bad block type";
         }
-        sizeDeclared *= 10;
-        sizeDeclared += raw[sizeStart + i] - '0';
+        if ((n -rPos) < 4) {  // does stream end before LEN/NLEN
+            return "truncated";
+        }
+        vBlockLen  = (uint16_t)(f[rPos]     | (f[rPos + 1] << 8));
+        vBlockNLen = (uint16_t)(f[rPos + 2] | (f[rPos + 3] << 8));
+        rPos      += 4;
+        if ((uint16_t)(vBlockLen ^ vBlockNLen) != (uint16_t)0xFFFF) {
+            return "bad block length";
+        }
+        if ((n - rPos) < vBlockLen) {  // does stream end before the data?
+            return "truncated";
+        }
+        memcpy(out + *outlen, f + rPos, vBlockLen);
+        rPos    += vBlockLen;
+        *outlen += vBlockLen;
+        //
+        // check adler checksum
+        //
+        if (n < (rPos + 4)) {  // does stream end before checksum?
+            return "truncated";
+        }
+    } while (lastBlock == 0x00);
+    vAdlerSumIs     = adler32(out, *outlen);
+    vAdlerSumShould = ((uint32_t)f[rPos]     << 24)
+                    | ((uint32_t)f[rPos + 1] << 16)
+                    | ((uint32_t)f[rPos + 2] << 8)
+                    | ((uint32_t)f[rPos + 3] << 0)
+                    ;
+    rPos           += 4;
+    if (vAdlerSumIs != vAdlerSumShould) {
+        return "bad adler32";
     }
-    //
-    // check declared vs actual
-    //
-    sizeActual = n - headerLen -1;
-    if (sizeDeclared != sizeActual) {
-        sprintf(out, "ERR size mismatch %zu != %zu", sizeDeclared, sizeActual);
-        return;
+    if (n != rPos) {
+        return "trailing data";
     }
-    memcpy(out, raw, headerLen);
-    out[headerLen] = '\0';
+    return NULL;
 }
 
 static int hexval(int c) {
@@ -99,45 +223,140 @@ static int hexval(int c) {
     return -1;
 }
 
-static void handle_line(const unsigned char *line, size_t len) {
+/* Decodes s[0..len) into out; returns 1 when len is even and all digits are hex. */
+static int decode_hex(const char *s, size_t len, unsigned char *out) {
     size_t i;
-    int ok = (len % 2 == 0);
-    for (i = 0; ok && i < len; i++) {
-        if (hexval(line[i]) < 0) ok = 0;
+    if (len % 2 != 0) return 0;
+    for (i = 0; i < len; i++) {
+        if (hexval((unsigned char)s[i]) < 0) return 0;
     }
-    if (!ok) {
-        printf("ERR bad hex\n");
-        return;
+    for (i = 0; i < len / 2; i++) out[i] = (unsigned char)(hexval((unsigned char)s[2 * i]) * 16 + hexval((unsigned char)s[2 * i + 1]));
+    return 1;
+}
+
+/* Returns 1 and sets *type / *size for a well-formed object. */
+static int parse_object(const unsigned char *raw, size_t n, char *type, unsigned long *size) {
+    size_t nul = 0, i, sp = 0, spaces = 0, sizelen;
+    unsigned long declared = 0;
+    while (nul < n && raw[nul] != 0) nul++;
+    if (nul == n) return 0;
+    for (i = 0; i < nul; i++) {
+        if (raw[i] == ' ') {
+            spaces++;
+            sp = i;
+        }
     }
-    unsigned char *raw = (unsigned char *)malloc(len / 2 + 1);
-    char *out = (char *)malloc(len / 2 + 64);
-    for (i = 0; i < len / 2; i++) raw[i] = (unsigned char)(hexval(line[2 * i]) * 16 + hexval(line[2 * i + 1]));
-    check(raw, len / 2, out);
-    printf("%s\n", out);
-    free(raw);
-    free(out);
+    if (spaces != 1) return 0;
+    if (!((sp == 4 && (memcmp(raw, "blob", 4) == 0 || memcmp(raw, "tree", 4) == 0)) ||
+          (sp == 6 && memcmp(raw, "commit", 6) == 0) || (sp == 3 && memcmp(raw, "tag", 3) == 0)))
+        return 0;
+    sizelen = nul - sp - 1;
+    if (sizelen < 1 || sizelen > 9) return 0;
+    for (i = 0; i < sizelen; i++) {
+        unsigned char c = raw[sp + 1 + i];
+        if (c < '0' || c > '9') return 0;
+        declared = declared * 10 + (unsigned long)(c - '0');
+    }
+    if (sizelen > 1 && raw[sp + 1] == '0') return 0;
+    if (declared != (unsigned long)(n - nul - 1)) return 0;
+    memcpy(type, raw, sp);
+    type[sp] = 0;
+    *size = declared;
+    return 1;
+}
+
+static void print_hex(const unsigned char *p, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) printf("%02x", p[i]);
+    printf("\n");
+}
+
+static void handle_line(char *line) {
+    char *p1 = strchr(line, ' ');
+    char *p2 = NULL;
+    char *a1 = NULL, *a2 = NULL;
+    if (p1) {
+        *p1 = 0;
+        a1 = p1 + 1;
+        p2 = strchr(a1, ' ');
+        if (p2) {
+            *p2 = 0;
+            a2 = p2 + 1;
+        }
+    }
+    if (strcmp(line, "WRITE") == 0 && a1) {
+        size_t hlen = a2 ? strlen(a2) : 0;
+        unsigned char *payload = (unsigned char *)malloc(hlen / 2 + 1);
+        decode_hex(a2 ? a2 : "", hlen, payload);
+        size_t plen = hlen / 2;
+        char header[64];
+        int hn = snprintf(header, sizeof header, "%s %lu", a1, (unsigned long)plen);
+        size_t total = (size_t)hn + 1 + plen;
+        unsigned char *inflated = (unsigned char *)malloc(total);
+        memcpy(inflated, header, (size_t)hn + 1);
+        memcpy(inflated + hn + 1, payload, plen);
+        char sha[41];
+        sha1_hex(inflated, total, sha);
+        printf("objects/%.2s/%s\n", sha, sha + 2);
+        unsigned char *file = (unsigned char *)malloc(total + 5 * (total / 65535 + 1) + 8);
+        size_t flen = wrap_stored(inflated, total, file);
+        print_hex(file, flen);
+        free(payload);
+        free(inflated);
+        free(file);
+    } else if (strcmp(line, "READ") == 0) {
+        const char *arg = a1 ? a1 : "";
+        size_t alen = strlen(arg);
+        unsigned char *f = (unsigned char *)malloc(alen / 2 + 1);
+        if (!decode_hex(arg, alen, f)) {
+            printf("ERR bad hex\n");
+            free(f);
+            return;
+        }
+        size_t n = alen / 2, m = 0;
+        unsigned char *inflated = (unsigned char *)malloc(n + 1);
+        const char *err = unwrap_stored(f, n, inflated, &m);
+        if (err) {
+            printf("ERR %s\n", err);
+        } else {
+            char type[16];
+            unsigned long size = 0;
+            if (!parse_object(inflated, m, type, &size)) {
+                printf("ERR bad object\n");
+            } else {
+                char sha[41];
+                sha1_hex(inflated, m, sha);
+                printf("%s %lu %s\n", type, size, sha);
+            }
+        }
+        free(f);
+        free(inflated);
+    }
 }
 
 int main(void) {
     size_t cap = 1 << 16, len = 0, r;
-    unsigned char *data = (unsigned char *)malloc(cap);
+    char *data = (char *)malloc(cap + 1);
     if (!data) return 1;
     while ((r = fread(data + len, 1, cap - len, stdin)) > 0) {
         len += r;
         if (len == cap) {
             cap *= 2;
-            data = (unsigned char *)realloc(data, cap);
+            data = (char *)realloc(data, cap + 1);
             if (!data) return 1;
         }
     }
+    data[len] = 0;
     size_t start = 0, i;
-    for (i = 0; i < len; i++) {
-        if (data[i] == '\n') {
-            handle_line(data + start, i - start);
+    for (i = 0; i <= len; i++) {
+        if (i == len || data[i] == '\n') {
+            if (i > start || i < len) {
+                data[i] = 0;
+                handle_line(data + start);
+            }
             start = i + 1;
         }
     }
-    if (start < len) handle_line(data + start, len - start);
     free(data);
     return 0;
 }
